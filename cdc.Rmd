@@ -1,0 +1,219 @@
+---
+title: "CDC Injury Classification"
+author: "An Tran"
+date: "11/6/2019"
+output: html_document
+---
+
+Pre-processing & cleaning text
+
+```{r}
+library(tm)
+library(wordcloud)
+library(ggplot2)
+library(keras)
+# install_keras()
+
+
+# import training and test set
+train <- read.csv('train.csv', stringsAsFactors = F, header = T)
+test <- read.csv('test.csv', stringsAsFactors = F, header = T)
+
+# create an empty event to merge 2 datasets
+# train$event <- as.factor(train$event)
+test$event <- NA
+combined <- rbind(train, test)
+
+# look at data
+str(combined)
+
+# combined$sex <- as.factor(combined$sex)
+# binarize sex variable
+combined$sex <- combined$sex - 1
+
+#normalized age
+combined$age <- ((combined$age- min(combined$age)) /(max(combined$age)-min(combined$age)))
+
+# how many categories in output label?
+length(unique(combined$event))
+ggplot(data=combined[!is.na(combined$event),], aes(x=event)) +
+  geom_bar() # super imbalanced data
+
+# remove any non-ascii characters from our documents first
+combined$text <- iconv(combined$text, "latin1", "ASCII", sub="")
+
+# create a corpus of text from our documents
+corpus <- Corpus(VectorSource(combined$text))
+
+# wordcloud to see the most popular words
+wordcloud(corpus, colors=rainbow(7), max.words = 50)
+
+# let's lowercase everything
+corpus <- tm_map(corpus, tolower)
+
+# replace some abreviations to make more sense
+corpus <- tm_map(corpus, content_transformer(function(x) gsub("yom", " year old male ", x)))
+corpus <- tm_map(corpus, content_transformer(function(x) gsub("yof", " year old female ", x)))
+corpus <- tm_map(corpus, content_transformer(function(x) gsub("ym", " year old male ", x)))
+corpus <- tm_map(corpus, content_transformer(function(x) gsub("yf", " year old female ", x)))
+corpus <- tm_map(corpus, content_transformer(function(x) gsub("yowm", " year old male ", x)))
+corpus <- tm_map(corpus, content_transformer(function(x) gsub("yowf", " year old female ", x)))
+corpus <- tm_map(corpus, content_transformer(function(x) gsub("yo m", " year old male ", x)))
+corpus <- tm_map(corpus, content_transformer(function(x) gsub("y o m", " year old male ", x)))
+corpus <- tm_map(corpus, content_transformer(function(x) gsub("yo f", " year old female ", x)))
+corpus <- tm_map(corpus, content_transformer(function(x) gsub("y o f", " year old female ", x)))
+corpus <- tm_map(corpus, content_transformer(function(x) gsub(" yo ", " year old ", x)))
+corpus <- tm_map(corpus, content_transformer(function(x) gsub("dx", " diagnosis ", x)))
+corpus <- tm_map(corpus, content_transformer(function(x) gsub(" d x ", " diagnosis ", x)))
+corpus <- tm_map(corpus, content_transformer(function(x) gsub(" c o ", " complains of ", x)))
+corpus <- tm_map(corpus, content_transformer(function(x) gsub("bibems", " brought in by ems ", x)))
+corpus <- tm_map(corpus, content_transformer(function(x) gsub(" pt ", " patient ", x)))
+corpus <- tm_map(corpus, content_transformer(function(x) gsub(" pts ", " patients ", x)))
+corpus <- tm_map(corpus, content_transformer(function(x) gsub(" lac ", " laceration ", x)))
+corpus <- tm_map(corpus, content_transformer(function(x) gsub(" lt ", " left ", x)))
+corpus <- tm_map(corpus, content_transformer(function(x) gsub(" rt ", " right ", x)))
+corpus <- tm_map(corpus, content_transformer(function(x) gsub(" sus ", " sustained ", x)))
+corpus <- tm_map(corpus, content_transformer(function(x) gsub("fx", " fracture ", x)))
+corpus <- tm_map(corpus, content_transformer(function(x) gsub("bldg", " building ", x)))
+corpus <- tm_map(corpus, content_transformer(function(x) gsub(" s p ", " status post ", x)))
+corpus <- tm_map(corpus, content_transformer(function(x) gsub(" w ", " with ", x)))
+corpus <- tm_map(corpus, content_transformer(function(x) gsub(" gsw ", " gun shot wound ", x)))
+corpus <- tm_map(corpus, content_transformer(function(x) gsub(" etoh ", " ethanol ", x)))
+corpus <- tm_map(corpus, content_transformer(function(x) gsub(" loc ", " loss of consciousness ", x)))
+corpus <- tm_map(corpus, content_transformer(function(x) gsub("pta", " prior to arrival ", x)))
+corpus <- tm_map(corpus, content_transformer(function(x) gsub(" x ", " for ", x)))
+corpus <- tm_map(corpus, content_transformer(function(x) gsub(" chi ", " closed head injury ", x)))
+corpus <- tm_map(corpus, content_transformer(function(x) gsub(" 2 2 ", " secondary to ", x)))
+corpus <- tm_map(corpus, content_transformer(function(x) gsub("lbp", " low blood pressure ", x)))
+corpus <- tm_map(corpus, content_transformer(function(x) gsub(" htn ", " hypertension ", x)))
+corpus <- tm_map(corpus, content_transformer(function(x) gsub(" pw ", " puncture wound ", x)))
+
+# remove numbers at the beginning of each text since these are just the patients' ages; and we already have a separate column for their ages.
+corpus <- tm_map(corpus, removeNumbers)
+
+# replace punctuations with a space then strip the space
+# instead of directly removing punctuations because it might
+# accidentally join 2 words together.
+replacePunctuation <- content_transformer(function(x) {return (gsub("[[:punct:]]", " ", x))})
+# corpus <- tm_map(corpus, PlainTextDocument)
+corpus <- tm_map(corpus, replacePunctuation)
+corpus <- tm_map(corpus, stripWhitespace)
+
+# remove the words "year", "old", "female" and "male" (we already have gender variable)
+corpus <- tm_map(corpus, removeWords, c('year', 'old', 'male', 'female'))
+
+# remove stopwords
+corpus <- tm_map(corpus, removeWords, stopwords('english'))
+corpus <- tm_map(corpus, stripWhitespace) # strip extra space again
+```
+
+Create a DTM out of corpus
+
+```{r}
+# # create a DocumentTermMatrix from our corpus. only consider words that have 3 characters
+# dtm_tf <- DocumentTermMatrix(corpus, control=list(wordLengths=c(3, Inf)))
+# dtm_tf # 40416 terms
+
+# create a DocumentTermMatrix from our corpus with TF-IDF
+tfidf <- DocumentTermMatrix(corpus, control=list(weighting=function(x) weightTfIdf(x, normalize=T)))
+tfidf # 40416 terms
+
+# # remove sparse terms that do not appear in at least 0.00003% of all documents
+# cleaned <- removeSparseTerms(dtm_tf, 0.99997) # 7021 terms
+# cleaned
+
+# remove sparse terms that do not appear in at least 0.00003% of all documents
+cleaned <- removeSparseTerms(tfidf, 0.99997) # 7021 terms
+cleaned
+
+# convert our DTM into a matrix in order to start learning
+cdc_cleaned <- as.matrix(cleaned)
+
+# # use binary representation instead of term frequency
+# cdc_cleaned[cdc_cleaned != 0] <- 1
+# cdc_cleaned[1:5, 1:5]
+
+# add the gender and age column to our existing matrix
+cdc_cleaned <- cbind(cdc_cleaned, combined$sex, combined$age)
+
+# split into train and test set matrices
+cdc_training <- as.matrix(cdc_cleaned[!is.na(combined$event),])
+cdc_test <- as.matrix(cdc_cleaned[is.na(combined$event),])
+
+# categorize training labels
+labels_encode <- data.frame(sort(unique(train$event)))
+names(labels_encode)[1] <- 'event'
+labels_encode$levels <- as.integer(seq(0, 47, 1))
+train$levels <- labels_encode$levels[match(train$event, labels_encode$event)]
+label_dummy <- to_categorical(train$levels) # goes from 0 to number of classes
+```
+
+Create a simple Neural Network
+
+```{r}
+# construct NN structure
+model <- keras_model_sequential() %>%
+  layer_dense(units = 64, activation = "relu", input_shape = c(7023)) %>%
+  layer_dense(units = 64, activation = "relu") %>%
+  layer_dense(units = 48, activation = "softmax")
+
+model %>% compile(
+  optimizer = "rmsprop",
+  loss = "categorical_crossentropy",
+  metrics = c("accuracy")
+)
+
+# set aside 20% of the samples for validation
+val_indices <- 1:30791
+x_val <- cdc_training[val_indices,]
+partial_x_train <- cdc_training[-val_indices,]
+y_val <- label_dummy[val_indices,]
+partial_y_train = label_dummy[-val_indices,]
+
+# train our network
+history <- model %>% fit(
+  partial_x_train,
+  partial_y_train,
+  epochs = 30,
+  batch_size = 512,
+  validation_data = list(x_val, y_val)
+)
+
+plot(history)
+```
+
+The network begins to overfit after 12 epochs. Let's train a new network from scratch on entire training set for 13 epochs and then use it to predict the test set.
+
+```{r}
+model <- keras_model_sequential() %>%
+  layer_dense(units = 64, activation = "relu", input_shape = c(7023)) %>%
+  layer_dense(units = 64, activation = "relu") %>%
+  layer_dense(units = 48, activation = "softmax")
+
+model %>% compile(
+  optimizer = "rmsprop",
+  loss = "categorical_crossentropy",
+  metrics = c("accuracy")
+)
+
+# let's use the entire training set to train the model and the # of epochs to stop after which accuracy on validation set converges
+model %>% fit(cdc_training, label_dummy, epochs=12, batch_size=512)
+
+# predict test data
+predictions <- model %>% predict(cdc_test)
+test[, "levels"] <- apply(predictions[,], 1, which.max) # maximum probabilities of each row will be the final prediction
+
+# now we have to convert these predicted levels back into their original event because these are encoded levels from 0 to 47
+test$event <- labels_encode$event[match(test$levels, labels_encode$levels+1)]
+
+# drop the "levels" column in "test" dataframe as we don't need it anymore
+test$levels <- NULL
+```
+
+
+Write this "test" dataframe to a csv file for submission.
+
+```{r}
+write.csv(test, 'solution_tfidf_with_age_sex.csv', row.names=F)
+```
+
